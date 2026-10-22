@@ -1,0 +1,4 @@
+# Supabase CLI config. Only the project id is set; every other value uses the
+# CLI defaults. Migrations live in supabase/migrations and are applied with
+# `npx supabase db push` after `npx supabase link --project-ref <ref>`.
+project_id = "ai-social-growth-studio"
