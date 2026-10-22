@@ -9,6 +9,7 @@ import { statusLabel } from "@/lib/orders-ui";
 import { ORDER_STATUSES, type OrderStatus } from "@/modules/orders/schemas";
 import { PillTabs } from "@/components/dashboard/pill-tabs";
 import { OrderCard } from "@/components/orders/order-card";
+import { cn } from "@/lib/utils";
 
 type Filter = OrderStatus | "all";
 
@@ -49,7 +50,8 @@ export default function OrdersPage() {
   const labelsHref = `/labels?ids=${[...selected].join(",")}`;
 
   return (
-    <div className="flex flex-col gap-5">
+    // Extra bottom room while the bulk bar is open, so it never hides the last card
+    <div className={cn("flex flex-col gap-5", selected.size > 0 && "pb-24")}>
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <PillTabs<Filter>
           aria-label={t.orders.statusLabel}
@@ -113,7 +115,7 @@ export default function OrdersPage() {
 
       {/* Bulk action bar — sits above the mobile tab bar */}
       {selected.size > 0 && (
-        <div className="fixed inset-x-3 bottom-24 z-50 mx-auto flex max-w-3xl flex-wrap items-center gap-2 rounded-2xl bg-foreground p-2 ps-4 text-background shadow-float md:bottom-6 md:ps-4">
+        <div className="fixed inset-x-3 bottom-24 z-50 mx-auto flex max-w-3xl flex-wrap items-center gap-2 rounded-2xl bg-foreground p-2 ps-4 text-background shadow-float md:start-32 md:end-8 md:bottom-6">
           <span className="text-sm font-semibold">{fmt(t.orders.selected, { count: selected.size })}</span>
           <button type="button" onClick={selectAllVisible} className="text-xs underline opacity-80 hover:opacity-100">
             {t.orders.selectAll}

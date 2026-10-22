@@ -1,5 +1,6 @@
 import React, { Suspense } from "react";
 import { notFound } from "next/navigation";
+import { connection } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getStore } from "@/modules/store/store-service";
 import { StoreForm } from "@/components/store/store-form";
@@ -17,6 +18,8 @@ export default function StorePage({ params }: Props) {
 
 async function StoreLoader({ params }: Props) {
   const { slug } = await params;
+  // Stock and prices are live: always render at request time
+  await connection();
   const store = await getStore(await createClient(), slug);
   if (!store) notFound();
   return <StoreForm slug={slug} store={store} />;
