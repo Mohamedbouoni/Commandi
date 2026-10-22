@@ -48,7 +48,16 @@ export function StatusPill({ status }: { status: OrderStatus }) {
   );
 }
 
-export function OrderCard({ order }: { order: Order }) {
+export function OrderCard({
+  order,
+  selected = false,
+  onToggleSelect,
+}: {
+  order: Order;
+  selected?: boolean;
+  /** Shows a checkbox for bulk actions when set */
+  onToggleSelect?: (id: string) => void;
+}) {
   const { t, language } = useLanguage();
   const { data: shop } = useShop();
   const updateOrder = useUpdateOrder();
@@ -76,11 +85,21 @@ export function OrderCard({ order }: { order: Order }) {
     <article
       className={cn(
         "flex flex-col gap-3 rounded-xl bg-card p-4 shadow-card transition-opacity",
-        (updateOrder.isPending || deleteOrder.isPending) && "opacity-60"
+        (updateOrder.isPending || deleteOrder.isPending) && "opacity-60",
+        selected && "ring-2 ring-primary"
       )}
     >
       {/* Header: number, date, status, menu */}
       <div className="flex items-center gap-2">
+        {onToggleSelect && (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onToggleSelect(order.id)}
+            aria-label={`${t.orders.select} #${order.number}`}
+            className="size-4 cursor-pointer accent-primary"
+          />
+        )}
         <span className="text-xs font-semibold text-muted-foreground tabular-nums">#{order.number}</span>
         <span className="text-xs text-muted-foreground">
           {formatDate(order.createdAt, language, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}

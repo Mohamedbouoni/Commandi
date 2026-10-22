@@ -8,6 +8,12 @@ const filtersSchema = z.object({
   status: z.enum(ORDER_STATUSES).optional(),
   q: z.string().max(100).optional(),
   limit: z.coerce.number().int().min(1).max(1000).optional(),
+  /** Comma-separated order ids */
+  ids: z
+    .string()
+    .transform((v) => v.split(",").filter(Boolean))
+    .pipe(z.array(z.string().uuid()).max(200))
+    .optional(),
 });
 
 export async function GET(request: Request) {

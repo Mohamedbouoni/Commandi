@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Check, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Check, Eye, EyeOff, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useLanguage } from "@/lib/i18n/provider";
 import { useDeleteProduct, useProducts, useSaveProduct } from "@/lib/queries/hooks";
 import { dinars, inputToMillimes, millimesToInput } from "@/lib/orders-ui";
@@ -9,17 +9,46 @@ import type { Product } from "@/modules/orders/schemas";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 
 interface Draft {
   name: string;
   price: string;
   cost: string;
+  /** Empty = stock not tracked */
+  stock: string;
 }
 
-const EMPTY_DRAFT: Draft = { name: "", price: "", cost: "" };
+const EMPTY_DRAFT: Draft = { name: "", price: "", cost: "", stock: "" };
+const LOW_STOCK = 3;
 
 function toDraft(product: Product): Draft {
-  return { name: product.name, price: millimesToInput(product.price), cost: millimesToInput(product.cost) };
+  return {
+    name: product.name,
+    price: millimesToInput(product.price),
+    cost: millimesToInput(product.cost),
+    stock: product.stock === null ? "" : String(product.stock),
+  };
+}
+
+function parseStock(value: string): number | null {
+  const n = parseInt(value.trim(), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function StockCell({ stock }: { stock: number | null }) {
+  const { t } = useLanguage();
+  if (stock === null) return <span className="text-muted-foreground">{t.products.stockUntracked}</span>;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 tabular-nums",
+        stock <= 0 ? "font-semibold text-negative" : stock <= LOW_STOCK ? "font-semibold text-amber-600" : ""
+      )}
+    >
+      {stock <= 0 ? t.products.outOfStock : stock}
+    </span>
+  );
 }
 
 export default function ProductsPage() {
@@ -32,12 +61,14 @@ export default function ProductsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<Draft>(EMPTY_DRAFT);
 
-  const save = (values: Draft, id?: string) =>
+  const save = (values: Draft, id?: string, visible = true) =>
     saveProduct.mutateAsync({
       id,
       name: values.name.trim(),
       price: inputToMillimes(values.price),
       cost: inputToMillimes(values.cost),
+      stock: parseStock(values.stock),
+      visible,
     });
 
   const handleAdd = async (e: React.FormEvent) => {
@@ -46,10 +77,13 @@ export default function ProductsPage() {
     setDraft(EMPTY_DRAFT);
   };
 
-  const handleSaveEdit = async (id: string) => {
-    await save(editDraft, id);
+  const handleSaveEdit = async (product: Product) => {
+    await save(editDraft, product.id, product.visible);
     setEditingId(null);
   };
+
+  const toggleVisible = (product: Product) =>
+    saveProduct.mutate({ ...product, visible: !product.visible });
 
   const tnd = t.common.tnd;
 
@@ -78,6 +112,10 @@ export default function ProductsPage() {
             <Input id="cost" inputMode="decimal" value={draft.cost} onChange={(e) => setDraft({ ...draft, cost: e.target.value })} />
           </div>
         </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="stock" className="text-xs text-muted-foreground">{t.products.stock}</Label>
+          <Input id="stock" inputMode="numeric" value={draft.stock} onChange={(e) => setDraft({ ...draft, stock: e.target.value })} placeholder={t.products.stockHint} />
+        </div>
         <Button type="submit" disabled={saveProduct.isPending} className="h-10 rounded-full">
           {saveProduct.isPending ? <Loader2 className="animate-spin" /> : <Plus />}
           {t.common.add}
@@ -98,7 +136,8 @@ export default function ProductsPage() {
                 <th className="px-2 py-3 text-end font-medium">{t.products.price}</th>
                 <th className="px-2 py-3 text-end font-medium">{t.products.cost}</th>
                 <th className="hidden px-2 py-3 text-end font-medium sm:table-cell">{t.products.margin}</th>
-                <th className="w-20" />
+                <th className="px-2 py-3 text-end font-medium">{t.products.stock}</th>
+                <th className="w-28" />
               </tr>
             </thead>
             <tbody>
@@ -116,8 +155,11 @@ export default function ProductsPage() {
                     </td>
                     <td className="hidden sm:table-cell" />
                     <td className="px-2 py-2">
+                      <Input inputMode="numeric" className="w-20 text-end" value={editDraft.stock} onChange={(e) => setEditDraft({ ...editDraft, stock: e.target.value })} placeholder="—" />
+                    </td>
+                    <td className="px-2 py-2">
                       <div className="flex justify-end gap-1">
-                        <Button size="icon" variant="ghost" aria-label={t.common.save} onClick={() => handleSaveEdit(product.id)}>
+                        <Button size="icon" variant="ghost" aria-label={t.common.save} onClick={() => handleSaveEdit(product)}>
                           <Check />
                         </Button>
                         <Button size="icon" variant="ghost" aria-label={t.common.cancel} onClick={() => setEditingId(null)}>
@@ -127,15 +169,27 @@ export default function ProductsPage() {
                     </td>
                   </tr>
                 ) : (
-                  <tr key={product.id} className="border-t">
+                  <tr key={product.id} className={cn("border-t", !product.visible && "text-muted-foreground")}>
                     <td className="px-4 py-3 font-medium" dir="auto">{product.name}</td>
                     <td className="px-2 py-3 text-end tabular-nums">{dinars(product.price)}</td>
                     <td className="px-2 py-3 text-end tabular-nums text-muted-foreground">{dinars(product.cost)}</td>
                     <td className="hidden px-2 py-3 text-end tabular-nums text-positive sm:table-cell">
                       {dinars(Math.max(0, product.price - product.cost))}
                     </td>
+                    <td className="px-2 py-3 text-end">
+                      <StockCell stock={product.stock} />
+                    </td>
                     <td className="px-2 py-3">
                       <div className="flex justify-end gap-1">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          aria-label={product.visible ? t.products.visible : t.products.hidden}
+                          title={product.visible ? t.products.visible : t.products.hidden}
+                          onClick={() => toggleVisible(product)}
+                        >
+                          {product.visible ? <Eye /> : <EyeOff />}
+                        </Button>
                         <Button
                           size="icon"
                           variant="ghost"

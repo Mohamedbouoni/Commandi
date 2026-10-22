@@ -17,6 +17,7 @@ export interface OrderFilters {
   status?: OrderStatus;
   q?: string;
   limit?: number;
+  ids?: string[];
 }
 
 function toQuery(params: Record<string, string | number | undefined>): string {
@@ -42,7 +43,10 @@ export function useOrders(filters: OrderFilters = {}) {
   return useQuery({
     queryKey: ["orders", filters],
     queryFn: () =>
-      apiFetch<{ data: Order[] }>(`/api/orders${toQuery({ ...filters })}`).then((r) => r.data),
+      apiFetch<{ data: Order[] }>(
+        `/api/orders${toQuery({ ...filters, ids: filters.ids?.join(",") })}`
+      ).then((r) => r.data),
+    enabled: filters.ids === undefined || filters.ids.length > 0,
   });
 }
 
@@ -76,6 +80,18 @@ export function useUpdateOrder() {
         method: "PATCH",
         body: JSON.stringify(changes),
       }).then((r) => r.data),
+    onSuccess: invalidate,
+  });
+}
+
+export function useBulkStatus() {
+  const invalidate = useInvalidateOrders();
+  return useMutation({
+    mutationFn: (input: { ids: string[]; status: OrderStatus }) =>
+      apiFetch<{ data: { updated: number } }>("/api/orders/bulk", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }).then((r) => r.data.updated),
     onSuccess: invalidate,
   });
 }

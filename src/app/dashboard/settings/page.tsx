@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { Check, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useLanguage } from "@/lib/i18n/provider";
 import { useShop, useUpdateShop } from "@/lib/queries/hooks";
 import { DEFAULT_CONFIRM_TEMPLATE, confirmMessage, inputToMillimes, millimesToInput } from "@/lib/orders-ui";
@@ -10,6 +10,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+
+/** "Boutique Yasmine!" -> "boutique-yasmine" (Arabic names give "", the seller types one) */
+function suggestSlug(name: string): string {
+  return name
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
 
 const SAMPLE_ORDER = {
   customerName: "Ahmed",
@@ -35,7 +46,19 @@ function SettingsForm({ shop }: { shop: Shop }) {
   const [deliveryFee, setDeliveryFee] = useState(millimesToInput(shop.defaultDeliveryFee));
   const [shippingCost, setShippingCost] = useState(millimesToInput(shop.defaultShippingCost));
   const [template, setTemplate] = useState(shop.confirmTemplate ?? DEFAULT_CONFIRM_TEMPLATE);
+  const [slug, setSlug] = useState(shop.slug ?? suggestSlug(shop.name));
+  const [storeEnabled, setStoreEnabled] = useState(shop.storeEnabled);
+  const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  // Link to the saved slug: an unsaved one would open a "not found" page
+  const storeUrl = shop.slug ? `${window.location.origin}/s/${shop.slug}` : null;
+  const copyLink = async () => {
+    if (!storeUrl) return;
+    await navigator.clipboard.writeText(storeUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,6 +69,9 @@ function SettingsForm({ shop }: { shop: Shop }) {
       defaultShippingCost: inputToMillimes(shippingCost),
       // Store null for the default so future improvements to it reach this shop
       confirmTemplate: template.trim() === DEFAULT_CONFIRM_TEMPLATE ? null : template.trim(),
+      slug: slug.trim() ? slug.trim().toLowerCase() : null,
+      // A store with no link cannot be reached, so keep it off
+      storeEnabled: storeEnabled && Boolean(slug.trim()),
     });
     setSaved(true);
   };
@@ -82,6 +108,54 @@ function SettingsForm({ shop }: { shop: Shop }) {
               <Input id="shippingCost" inputMode="decimal" value={shippingCost} onChange={(e) => setShippingCost(e.target.value)} />
             </div>
           </div>
+        </section>
+
+        <section className="flex flex-col gap-3 rounded-xl bg-card p-5 shadow-card">
+          <div>
+            <h2 className="text-lg font-bold">{t.settings.storeTitle}</h2>
+            <p className="text-xs text-muted-foreground">{t.settings.storeHint}</p>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="slug" className="text-xs text-muted-foreground">{t.settings.storeSlug}</Label>
+            <div className="flex h-10 items-center overflow-hidden rounded-lg border bg-background text-sm focus-within:ring-3 focus-within:ring-ring/30" dir="ltr">
+              <span className="ps-3 text-muted-foreground">/s/</span>
+              <input
+                id="slug"
+                value={slug}
+                onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
+                maxLength={40}
+                placeholder="boutique-yasmine"
+                className="h-full min-w-0 flex-1 bg-transparent pe-3 outline-none"
+              />
+            </div>
+          </div>
+          <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={storeEnabled}
+              onChange={(e) => setStoreEnabled(e.target.checked)}
+              className="size-4 accent-primary"
+            />
+            {storeEnabled ? t.settings.storeEnabled : t.settings.storeDisabled}
+          </label>
+          {storeUrl && shop.storeEnabled && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg bg-muted p-2 ps-3 text-sm">
+              <span className="min-w-0 flex-1 truncate font-mono text-xs" dir="ltr">{storeUrl}</span>
+              <Button type="button" variant="outline" size="sm" onClick={copyLink} className="rounded-full">
+                {copied ? <Check /> : <Copy />}
+                {copied ? t.settings.copied : t.settings.copyLink}
+              </Button>
+              <a
+                href={storeUrl}
+                target="_blank"
+                rel="noopener"
+                className="inline-flex h-8 items-center gap-1 rounded-full px-3 text-xs font-semibold hover:bg-background"
+              >
+                <ExternalLink className="size-3.5" />
+                {t.settings.openStore}
+              </a>
+            </div>
+          )}
         </section>
       </div>
 

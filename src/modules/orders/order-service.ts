@@ -8,7 +8,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { AppError } from "@/lib/errors";
+import { logger } from "@/lib/logging/logger";
 import {
+  bulkStatusSchema,
   orderInputSchema,
   orderUpdateSchema,
   productInputSchema,
@@ -18,6 +20,7 @@ import {
   type OrderItem,
   type OrderStatus,
   type Product,
+  type ShieldHistory,
   type Shop,
 } from "./schemas";
 
@@ -41,6 +44,14 @@ interface OrderRow {
   updated_at: string;
 }
 
+interface ShieldRow {
+  phone: string;
+  shops: number;
+  delivered: number;
+  returned: number;
+  cancelled: number;
+}
+
 interface BuyerStatsRow {
   phone: string;
   total_orders: number;
@@ -52,7 +63,8 @@ interface BuyerStatsRow {
 const ORDER_COLUMNS =
   "id, number, customer_name, phone, governorate, address, items, subtotal, delivery_fee, shipping_cost, product_cost, status, source, notes, confirm_sent_at, created_at, updated_at";
 
-const EMPTY_HISTORY: BuyerHistory = { totalOrders: 0, delivered: 0, returned: 0, cancelled: 0 };
+const EMPTY_SHIELD: ShieldHistory = { shops: 0, delivered: 0, returned: 0, cancelled: 0 };
+const EMPTY_HISTORY: BuyerHistory = { totalOrders: 0, delivered: 0, returned: 0, cancelled: 0, network: EMPTY_SHIELD };
 
 function check<T>(result: { data: T; error: { message: string } | null }): T {
   if (result.error) throw new Error(result.error.message);
@@ -88,17 +100,47 @@ async function buyerHistories(
 ): Promise<Map<string, BuyerHistory>> {
   const unique = [...new Set(phones)];
   if (unique.length === 0) return new Map();
-  const rows = check(
-    await supabase
+  const [rows, shield] = await Promise.all([
+    supabase
       .from("buyer_stats")
       .select("phone, total_orders, delivered, returned, cancelled")
       .in("phone", unique)
-  ) as BuyerStatsRow[];
+      .then(check) as Promise<BuyerStatsRow[]>,
+    shieldHistories(supabase, unique),
+  ]);
+  const local = new Map(rows.map((r) => [r.phone, r]));
   return new Map(
-    rows.map((r) => [
+    unique.map((phone) => {
+      const r = local.get(phone);
+      return [
+        phone,
+        {
+          totalOrders: Number(r?.total_orders ?? 0),
+          delivered: Number(r?.delivered ?? 0),
+          returned: Number(r?.returned ?? 0),
+          cancelled: Number(r?.cancelled ?? 0),
+          network: shield.get(phone) ?? EMPTY_SHIELD,
+        },
+      ];
+    })
+  );
+}
+
+/**
+ * Commandi Shield: the same phones' record at other shops. Best effort — if
+ * migration 002 has not been run yet the app keeps working without it.
+ */
+async function shieldHistories(supabase: SupabaseClient, phones: string[]): Promise<Map<string, ShieldHistory>> {
+  const { data, error } = await supabase.rpc("commandi_shield", { p_phones: phones.slice(0, 500) });
+  if (error) {
+    logger.warn("Shield lookup failed", { error: error.message });
+    return new Map();
+  }
+  return new Map(
+    (data as ShieldRow[]).map((r) => [
       r.phone,
       {
-        totalOrders: Number(r.total_orders),
+        shops: Number(r.shops),
         delivered: Number(r.delivered),
         returned: Number(r.returned),
         cancelled: Number(r.cancelled),
@@ -124,6 +166,8 @@ export interface OrderFilters {
   q?: string;
   from?: string;
   limit?: number;
+  /** Exact orders, e.g. for printing labels */
+  ids?: string[];
 }
 
 export async function listOrders(supabase: SupabaseClient, filters: OrderFilters = {}): Promise<Order[]> {
@@ -135,6 +179,7 @@ export async function listOrders(supabase: SupabaseClient, filters: OrderFilters
 
   if (filters.status) query = query.eq("status", filters.status);
   if (filters.from) query = query.gte("created_at", filters.from);
+  if (filters.ids) query = query.in("id", filters.ids);
 
   const q = filters.q?.trim();
   if (q) {
@@ -209,6 +254,15 @@ export async function updateOrder(supabase: SupabaseClient, id: string, input: u
 
   const histories = await buyerHistories(supabase, [row.phone]);
   return toOrder(row, histories.get(row.phone));
+}
+
+/** Moves many orders to one status, e.g. "all of today's parcels shipped". */
+export async function bulkUpdateStatus(supabase: SupabaseClient, input: unknown): Promise<number> {
+  const { ids, status } = bulkStatusSchema.parse(input);
+  const rows = check(
+    await supabase.from("orders").update({ status }).in("id", ids).neq("status", status).select("id")
+  );
+  return rows?.length ?? 0;
 }
 
 export async function deleteOrder(supabase: SupabaseClient, id: string): Promise<void> {
@@ -296,9 +350,11 @@ export async function getStats(supabase: SupabaseClient, from: string): Promise<
 // Products
 // ---------------------------------------------------------------------------
 
+const PRODUCT_COLUMNS = "id, name, price, cost, stock, visible";
+
 export async function listProducts(supabase: SupabaseClient): Promise<Product[]> {
   return check(
-    await supabase.from("products").select("id, name, price, cost").order("name").limit(500)
+    await supabase.from("products").select(PRODUCT_COLUMNS).order("name").limit(500)
   ) as Product[];
 }
 
@@ -307,8 +363,8 @@ export async function createProduct(supabase: SupabaseClient, shopId: string, in
   return check(
     await supabase
       .from("products")
-      .insert({ shop_id: shopId, ...product })
-      .select("id, name, price, cost")
+      .insert({ shop_id: shopId, ...product, stock: product.stock ?? null, visible: product.visible ?? true })
+      .select(PRODUCT_COLUMNS)
       .single()
   ) as Product;
 }
@@ -316,7 +372,7 @@ export async function createProduct(supabase: SupabaseClient, shopId: string, in
 export async function updateProduct(supabase: SupabaseClient, id: string, input: unknown): Promise<Product> {
   const changes = productInputSchema.partial().parse(input);
   const row = check(
-    await supabase.from("products").update(changes).eq("id", id).select("id, name, price, cost").maybeSingle()
+    await supabase.from("products").update(changes).eq("id", id).select(PRODUCT_COLUMNS).maybeSingle()
   ) as Product | null;
   if (!row) throw new AppError("NOT_FOUND", "Product not found.", 404);
   return row;
@@ -336,6 +392,8 @@ interface ShopRow {
   default_delivery_fee: number;
   default_shipping_cost: number;
   confirm_template: string | null;
+  slug: string | null;
+  store_enabled: boolean;
 }
 
 function toShop(row: ShopRow): Shop {
@@ -344,10 +402,12 @@ function toShop(row: ShopRow): Shop {
     defaultDeliveryFee: row.default_delivery_fee,
     defaultShippingCost: row.default_shipping_cost,
     confirmTemplate: row.confirm_template,
+    slug: row.slug,
+    storeEnabled: row.store_enabled,
   };
 }
 
-const SHOP_COLUMNS = "name, default_delivery_fee, default_shipping_cost, confirm_template";
+const SHOP_COLUMNS = "name, default_delivery_fee, default_shipping_cost, confirm_template, slug, store_enabled";
 
 export async function getShop(supabase: SupabaseClient, shopId: string): Promise<Shop> {
   const row = check(
@@ -356,7 +416,14 @@ export async function getShop(supabase: SupabaseClient, shopId: string): Promise
   // The sign-up trigger creates the row; fall back to defaults if it is missing
   return row
     ? toShop(row)
-    : { name: "", defaultDeliveryFee: 7000, defaultShippingCost: 7000, confirmTemplate: null };
+    : {
+        name: "",
+        defaultDeliveryFee: 7000,
+        defaultShippingCost: 7000,
+        confirmTemplate: null,
+        slug: null,
+        storeEnabled: false,
+      };
 }
 
 export async function updateShop(supabase: SupabaseClient, shopId: string, input: unknown): Promise<Shop> {
@@ -366,11 +433,14 @@ export async function updateShop(supabase: SupabaseClient, shopId: string, input
   if (changes.defaultDeliveryFee !== undefined) patch.default_delivery_fee = changes.defaultDeliveryFee;
   if (changes.defaultShippingCost !== undefined) patch.default_shipping_cost = changes.defaultShippingCost;
   if (changes.confirmTemplate !== undefined) patch.confirm_template = changes.confirmTemplate || null;
+  if (changes.slug !== undefined) patch.slug = changes.slug;
+  if (changes.storeEnabled !== undefined) patch.store_enabled = changes.storeEnabled;
 
-  const row = check(
-    await supabase.from("shops").upsert({ id: shopId, ...patch }).select(SHOP_COLUMNS).single()
-  ) as ShopRow;
-  return toShop(row);
+  const result = await supabase.from("shops").upsert({ id: shopId, ...patch }).select(SHOP_COLUMNS).single();
+  if (result.error?.code === "23505") {
+    throw new AppError("INVALID_REQUEST", "This store link is already taken. Try another one.", 409);
+  }
+  return toShop(check(result) as ShopRow);
 }
 
 export const idSchema = z.string().uuid();

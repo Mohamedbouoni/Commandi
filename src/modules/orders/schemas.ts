@@ -17,7 +17,7 @@ export const ORDER_STATUSES = [
 ] as const;
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
-export const ORDER_SOURCES = ["messenger", "instagram", "whatsapp", "phone", "other"] as const;
+export const ORDER_SOURCES = ["messenger", "instagram", "whatsapp", "phone", "store", "other"] as const;
 export type OrderSource = (typeof ORDER_SOURCES)[number];
 
 const millimes = z.number().int().min(0).max(100_000_000);
@@ -73,24 +73,52 @@ export const productInputSchema = z.object({
   name: z.string().trim().min(1).max(200),
   price: millimes,
   cost: millimes,
+  // No defaults: Zod applies them even under .partial(), which would reset
+  // these on every price edit. The service fills them in on create.
+  /** null = stock not tracked */
+  stock: z.number().int().min(-100_000).max(1_000_000).nullable().optional(),
+  visible: z.boolean().optional(),
 });
+
+/** Lowercase letters, digits and inner dashes, 3–40 chars: "boutique-yasmine" */
+export const slugSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/, "Use 3–40 letters, numbers or dashes.");
 
 export const shopUpdateSchema = z.object({
   name: z.string().trim().max(120).optional(),
   defaultDeliveryFee: millimes.optional(),
   defaultShippingCost: millimes.optional(),
   confirmTemplate: z.string().trim().max(1000).nullable().optional(),
+  slug: slugSchema.nullable().optional(),
+  storeEnabled: z.boolean().optional(),
+});
+
+export const bulkStatusSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(200),
+  status: z.enum(ORDER_STATUSES),
 });
 
 // ---------------------------------------------------------------------------
 // Row types returned by the API
 // ---------------------------------------------------------------------------
 
+/** The same phone's record at other shops (Commandi Shield) — counts only. */
+export interface ShieldHistory {
+  shops: number;
+  delivered: number;
+  returned: number;
+  cancelled: number;
+}
+
 export interface BuyerHistory {
   totalOrders: number;
   delivered: number;
   returned: number;
   cancelled: number;
+  network: ShieldHistory;
 }
 
 export interface Order {
@@ -120,6 +148,8 @@ export interface Product {
   name: string;
   price: number;
   cost: number;
+  stock: number | null;
+  visible: boolean;
 }
 
 export interface Shop {
@@ -127,14 +157,25 @@ export interface Shop {
   defaultDeliveryFee: number;
   defaultShippingCost: number;
   confirmTemplate: string | null;
+  slug: string | null;
+  storeEnabled: boolean;
 }
 
 export type BuyerRisk = "new" | "trusted" | "risky";
 
-/** Risky once a buyer refused or cancelled at least one parcel and has more failures than deliveries. */
+/**
+ * Risky once a buyer refused or cancelled at least one parcel and has at least
+ * as many failures as deliveries — counting this shop and the Shield together.
+ */
 export function buyerRisk(buyer: BuyerHistory): BuyerRisk {
-  const failed = buyer.returned + buyer.cancelled;
-  if (failed > 0 && failed >= buyer.delivered) return "risky";
-  if (buyer.delivered > 0) return "trusted";
+  const failed = buyer.returned + buyer.cancelled + shieldFailed(buyer.network);
+  const delivered = buyer.delivered + buyer.network.delivered;
+  if (failed > 0 && failed >= delivered) return "risky";
+  if (delivered > 0) return "trusted";
   return "new";
+}
+
+/** Only refused parcels count from other shops: a cancel there may be their own choice. */
+export function shieldFailed(network: ShieldHistory): number {
+  return network.returned;
 }

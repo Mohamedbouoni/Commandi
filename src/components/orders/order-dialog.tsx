@@ -317,10 +317,21 @@ function OrderForm({ order, onDone }: { order: Order | null; onDone: () => void 
           )}
         >
           <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-          <span>
-            {risk === "risky"
-              ? fmt(t.form.riskWarning, { failed: buyer.returned + buyer.cancelled })
-              : fmt(t.form.trustedNote, { delivered: buyer.delivered })}
+          <span className="flex flex-col gap-1">
+            {risk === "risky" ? (
+              <>
+                {buyer.returned + buyer.cancelled > 0 && (
+                  <span>{fmt(t.form.riskWarning, { failed: buyer.returned + buyer.cancelled })}</span>
+                )}
+                {buyer.network.returned > 0 && (
+                  <span className="font-semibold">
+                    {fmt(t.form.shieldWarning, { returned: buyer.network.returned, shops: buyer.network.shops })}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span>{fmt(t.form.trustedNote, { delivered: buyer.delivered + buyer.network.delivered })}</span>
+            )}
           </span>
         </div>
       )}

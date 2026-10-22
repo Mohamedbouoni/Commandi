@@ -1,9 +1,10 @@
 "use client";
 
 import React, { useDeferredValue, useState } from "react";
-import { Download, Search } from "lucide-react";
+import { Download, Loader2, Printer, Search, X } from "lucide-react";
 import { useLanguage } from "@/lib/i18n/provider";
-import { useOrders } from "@/lib/queries/hooks";
+import { fmt } from "@/lib/i18n/format";
+import { useBulkStatus, useOrders } from "@/lib/queries/hooks";
 import { statusLabel } from "@/lib/orders-ui";
 import { ORDER_STATUSES, type OrderStatus } from "@/modules/orders/schemas";
 import { PillTabs } from "@/components/dashboard/pill-tabs";
@@ -28,6 +29,24 @@ export default function OrdersPage() {
   }, {});
 
   const exportHref = `/api/orders/export${status ? `?status=${status}` : ""}`;
+
+  // Bulk selection (ids stay selected across filter changes until cleared)
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const bulkStatus = useBulkStatus();
+  const toggleSelect = (id: string) =>
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const selectAllVisible = () => setSelected(new Set(orders?.map((o) => o.id)));
+  const clearSelection = () => setSelected(new Set());
+  const applyStatus = async (next: OrderStatus) => {
+    await bulkStatus.mutateAsync({ ids: [...selected], status: next });
+    clearSelection();
+  };
+  const labelsHref = `/labels?ids=${[...selected].join(",")}`;
 
   return (
     <div className="flex flex-col gap-5">
@@ -78,12 +97,59 @@ export default function OrdersPage() {
       ) : orders && orders.length > 0 ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {orders.map((order) => (
-            <OrderCard key={order.id} order={order} />
+            <OrderCard
+              key={order.id}
+              order={order}
+              selected={selected.has(order.id)}
+              onToggleSelect={toggleSelect}
+            />
           ))}
         </div>
       ) : (
         <div className="rounded-xl bg-card p-10 text-center text-sm text-muted-foreground shadow-card">
           {t.orders.empty}
+        </div>
+      )}
+
+      {/* Bulk action bar — sits above the mobile tab bar */}
+      {selected.size > 0 && (
+        <div className="fixed inset-x-3 bottom-24 z-50 mx-auto flex max-w-3xl flex-wrap items-center gap-2 rounded-2xl bg-foreground p-2 ps-4 text-background shadow-float md:bottom-6 md:ps-4">
+          <span className="text-sm font-semibold">{fmt(t.orders.selected, { count: selected.size })}</span>
+          <button type="button" onClick={selectAllVisible} className="text-xs underline opacity-80 hover:opacity-100">
+            {t.orders.selectAll}
+          </button>
+          <div className="ms-auto flex flex-wrap items-center gap-1.5">
+            {bulkStatus.isPending && <Loader2 className="size-4 animate-spin" />}
+            {(["confirmed", "shipped", "delivered", "returned"] as const).map((s) => (
+              <button
+                key={s}
+                type="button"
+                disabled={bulkStatus.isPending}
+                onClick={() => applyStatus(s)}
+                className="h-8 cursor-pointer rounded-full bg-background/15 px-3 text-xs font-semibold hover:bg-background/25 disabled:opacity-50"
+              >
+                {statusLabel(s, t)}
+              </button>
+            ))}
+            <a
+              href={labelsHref}
+              target="_blank"
+              rel="noopener"
+              className="inline-flex h-8 items-center gap-1.5 rounded-full bg-background px-3 text-xs font-semibold text-foreground hover:opacity-90"
+            >
+              <Printer className="size-3.5" />
+              {t.orders.printLabels}
+            </a>
+            <button
+              type="button"
+              onClick={clearSelection}
+              aria-label={t.orders.clearSelection}
+              className="grid size-8 cursor-pointer place-items-center rounded-full hover:bg-background/15"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+          {bulkStatus.isError && <p className="w-full text-xs text-red-300">{bulkStatus.error.message}</p>}
         </div>
       )}
     </div>
